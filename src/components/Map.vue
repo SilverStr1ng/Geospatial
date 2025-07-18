@@ -1,9 +1,11 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue';
+import { onMounted, onUnmounted, ref } from 'vue';
 import * as Cesium from 'cesium'
 
+import GlobalVolumetricClouds from '@/postrender/Cloud/Cloud.ts'
 
 let viewer: Cesium.Viewer
+
 Cesium.Ion.defaultAccessToken = import.meta.env.VITE_CESIUM_ACCESS_TOKEN
 
 onMounted(async () => {
@@ -39,9 +41,17 @@ onMounted(async () => {
   viewer.scene.fog.enabled = true
   viewer.scene.globe.enableLighting = true;
 
-
   window.__viewer = viewer
+  
 
+  setTimeout(() => {
+    const clouds = new GlobalVolumetricClouds(window.__viewer, {
+      cloudCover: 0.8,
+      windSpeedRatio: 0.0005
+    })
+
+    clouds.init()
+  }, 5000);
 })
 </script>
 
