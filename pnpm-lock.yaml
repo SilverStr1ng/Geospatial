@@ -11,6 +11,9 @@ importers:
       '@types/dat.gui':
         specifier: ^0.7.13
         version: 0.7.13
+      '@vicons/tabler':
+        specifier: ^0.13.0
+        version: 0.13.0
       cesium:
         specifier: ^1.131.0
         version: 1.131.0
@@ -33,6 +36,9 @@ importers:
       '@types/node':
         specifier: ^22.15.32
         version: 22.16.3
+      '@vicons/material':
+        specifier: ^0.13.0
+        version: 0.13.0
       '@vitejs/plugin-vue':
         specifier: ^6.0.0
         version: 6.0.0(rolldown-vite@7.0.8(@types/node@22.16.3)(jiti@2.4.2)(less@4.3.0))(vue@3.5.17(typescript@5.8.3))
@@ -631,6 +637,12 @@ packages:
   '@typescript-eslint/visitor-keys@8.36.0':
     resolution: {integrity: sha512-vZrhV2lRPWDuGoxcmrzRZyxAggPL+qp3WzUrlZD+slFueDiYHxeBa34dUXPuC0RmGKzl4lS5kFJYvKCq9cnNDA==}
     engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
+
+  '@vicons/material@0.13.0':
+    resolution: {integrity: sha512-lKVxFNprM+CaBkUH3gt6VjIeiMsKQl2zARQMwTCZruQl2vRHzyeZiKeCflWS99CEfv2JzX/6y697smxlzyxcVw==}
+
+  '@vicons/tabler@0.13.0':
+    resolution: {integrity: sha512-AykuhiqjszkIoAL/7knIFm6RDOBS1ZmQdJfQ+RNLEah0fVsxykUFCfMBSNZh8lOzC85EtdD1k5g/sv5GYk0Ohg==}
 
   '@vitejs/plugin-vue-jsx@5.0.1':
     resolution: {integrity: sha512-X7qmQMXbdDh+sfHUttXokPD0cjPkMFoae7SgbkF9vi3idGUKmxLcnU2Ug49FHwiKXebfzQRIm5yK3sfCJzNBbg==}
@@ -2583,6 +2595,10 @@ snapshots:
     dependencies:
       '@typescript-eslint/types': 8.36.0
       eslint-visitor-keys: 4.2.1
+
+  '@vicons/material@0.13.0': {}
+
+  '@vicons/tabler@0.13.0': {}
 
   '@vitejs/plugin-vue-jsx@5.0.1(rolldown-vite@7.0.8(@types/node@22.16.3)(jiti@2.4.2)(less@4.3.0))(vue@3.5.17(typescript@5.8.3))':
     dependencies:
