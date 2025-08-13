@@ -39,8 +39,8 @@
 ### 安装步骤
 ```bash
 # 克隆项目
-git clone git@github.com:SilverStr1ng/CesiumExamples.git
-cd CesiumExamples
+git clone git@github.com:SilverStr1ng/Geospatial.git
+cd Geospatial
 
 # 安装依赖
 npm install
@@ -52,22 +52,16 @@ VITE_CESIUM_ION_ACCESS_TOKEN=your_cesium_ion_token
 npm run dev
 ```
 
-## 项目结构 🗂️ -待修改
+## 项目结构 🗂️
 ```text
 src/
 ├── assets/                 # 静态资源
-│   └── shaders/            # GLSL代码 (.glsl)
+│   └── main.less/          # 样式文件 (.less)
 ├── components/
-│   ├── GlobeViewer.vue     # 地球主容器
-│   ├── AnalysisTools/      # 地理分析工具集
-│   └── MaterialLab/        # 材质实验组件
-├── composables/            # Vue组合式API
-│   ├── useOffscreen.js     # 离屏渲染逻辑
-│   └── useTerrainSampler.js 
-├── stores/                 # Pinia状态管理
-│   └── globeStore.js       
-├── workers/                # Web Workers
-│   └── demProcessor.js     # 地形数据处理线程
+│   └── Map.vue             # 地球主容器
+├── postrender/             # 后处理
+│   └── Cloud/              # 后处理组件
+│       └── Cloud.ts        # 纹理云层文件
 └── main.ts                 # 应用入口
 ```
 
@@ -81,4 +75,4 @@ src/
 ## 许可证 📄
 [MIT License](https://opensource.org/license/MIT)
 
-© 2025 CesiumExample Project
+© 2025 Geospatial Project
