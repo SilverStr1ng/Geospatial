@@ -38,8 +38,10 @@ import {
 } from '@vicons/material';
 
 import Cloud from '@/postrender/Cloud/Cloud.js'
+import GlobalVolumetricClouds from '@/postrender/Cloud/GlobalVolumetricClouds'
 
 let viewer: Cesium.Viewer;
+let globalClouds: GlobalVolumetricClouds | null = null;
 const message = useMessage();
 
 // 菜单可见性控制
@@ -230,19 +232,38 @@ const toggleLighting = () => {
 // 显示云层
 const showCloudLayer = () => {
   if (cloudVisible.value) {
-    // 隐藏云层的逻辑（待实现）
+    // 隐藏云层
+    if (globalClouds) {
+      globalClouds.destroy();
+      globalClouds = null;
+    }
     cloudVisible.value = false;
-    message.info('云层已隐藏');
+    message.info('全球体积云已隐藏');
     return;
   }
 
-  const cloud = new Cloud({
-    viewer: viewer
-  });
-
-  cloud._createPrimitive();
-  cloudVisible.value = true;
-  message.info('云层已显示');
+  try {
+    // 创建全球体积云实例 - 使用高可见性配置
+    globalClouds = new GlobalVolumetricClouds(viewer, {
+      cloudCover: 0.8,              // 高云量确保可见
+      cloudBase: 3000,              // 较高的云底
+      cloudTop: 10000,              // 较高的云顶
+      windSpeedRatio: 0.0001,       // 较慢的风速
+      absorptionCoefficient: 0.3,   // 较低的吸收系数使云层更亮
+      scatteringCoefficient: 0.4,   // 较高的散射系数
+      phaseG: 0.2,
+      lightingIntensity: 2.5,       // 高光照强度
+      cloudDensityScale: 2.0,       // 高密度确保可见
+      noiseScale: 0.0001,           // 大尺度噪声
+      timeScale: 0.1                // 慢时间流逝
+    });
+    
+    globalClouds.init();
+    cloudVisible.value = true;
+    message.success('全球体积云已启用 - 请等待3秒加载');
+  } catch (error) {
+    message.error('启用云层失败: ' + error);
+  }
 }
 
 const measureDistance = () => {
@@ -299,7 +320,44 @@ const timeControl = () => {
 }
 
 const weatherControl = () => {
-  message.info('天气控制功能待实现');
+  if (!globalClouds) {
+    message.warning('请先启用云层系统');
+    return;
+  }
+  
+  // 动态调整天气参数的示例 - 优化可见性
+  const weatherPresets = [
+    {
+      name: '晴朗',
+      cloudCover: 0.4,
+      windSpeedRatio: 0.00005,
+      absorptionCoefficient: 0.2,
+      lightingIntensity: 3.0,
+      cloudDensityScale: 1.0
+    },
+    {
+      name: '多云',
+      cloudCover: 0.7,
+      windSpeedRatio: 0.0001,
+      absorptionCoefficient: 0.4,
+      lightingIntensity: 2.5,
+      cloudDensityScale: 1.5
+    },
+    {
+      name: '阴天',
+      cloudCover: 0.9,
+      windSpeedRatio: 0.0002,
+      absorptionCoefficient: 0.6,
+      lightingIntensity: 2.0,
+      cloudDensityScale: 2.0
+    }
+  ];
+  
+  // 随机选择一个天气预设
+  const preset = weatherPresets[Math.floor(Math.random() * weatherPresets.length)];
+  globalClouds.updateOption(preset);
+  
+  message.info(`天气已切换至: ${preset.name}`);
 }
 
 // 执行菜单项动作
@@ -424,8 +482,7 @@ const getButtonText = (item: any) => {
     <div class="menu-toggle">
       <n-tooltip placement="right" trigger="hover">
         <template #trigger>
-          <n-button circle type="primary" @click="toggleMenu"
-            :style="{ backgroundColor: '#1890ff', borderColor: '#1890ff' }">
+          <n-button circle type="primary" @click="toggleMenu" class="menu-toggle-btn">
             <template #icon>
               <n-icon>
                 <Settings />
@@ -438,20 +495,15 @@ const getButtonText = (item: any) => {
     </div>
 
     <!-- 优化的悬浮菜单面板 - 支持多分类扩展 -->
-    <transition name="slide-fade">
+    <transition name="menu-slide">
       <div v-if="menuVisible" class="floating-menu" :class="{ 'collapsed': menuCollapsed }">
-        <n-card :title="menuCollapsed ? '' : '功能菜单'" size="small" :style="{
-          width: menuCollapsed ? '60px' : '380px',
-          backgroundColor: 'rgba(255, 255, 255, 0.95)',
-          backdropFilter: 'blur(10px)',
-          transition: 'all 0.3s ease'
-        }">
+        <n-card :title="menuCollapsed ? '' : '功能菜单'" size="small" class="menu-card">
           <!-- 菜单头部控制 -->
           <template #header-extra v-if="!menuCollapsed">
             <n-space>
               <n-tooltip placement="bottom" trigger="hover">
                 <template #trigger>
-                  <n-button size="tiny" quaternary @click="toggleMenuCollapse">
+                  <n-button size="tiny" quaternary @click="toggleMenuCollapse" class="header-btn">
                     <template #icon>
                       <n-icon>
                         <Menu2 />
@@ -621,17 +673,38 @@ const getButtonText = (item: any) => {
   width: 100%;
   height: 100vh;
   position: relative;
+  background: #0a0a0a;
 }
 
-/* 菜单切换按钮 */
+/* 菜单切换按钮 - 黑色主题 */
 .menu-toggle {
   position: absolute;
   top: 20px;
   left: 20px;
   z-index: 1000;
+  
+  .menu-toggle-btn {
+    background: linear-gradient(135deg, #2d2d2d 0%, #1a1a1a 100%);
+    border: 1px solid #404040;
+    color: #ffffff;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.6);
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    backdrop-filter: blur(20px);
+    
+    &:hover {
+      background: linear-gradient(135deg, #3d3d3d 0%, #2a2a2a 100%);
+      border-color: #555555;
+      transform: translateY(-2px) scale(1.05);
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.8);
+    }
+    
+    &:active {
+      transform: translateY(0) scale(0.98);
+    }
+  }
 }
 
-/* 悬浮菜单面板 */
+/* 悬浮菜单面板 - 黑色主题 */
 .floating-menu {
   position: absolute;
   top: 70px;
@@ -639,92 +712,130 @@ const getButtonText = (item: any) => {
   z-index: 999;
   max-height: calc(100vh - 100px);
   overflow-y: auto;
-  transition: all 0.3s ease;
+  transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+  transform-origin: top left;
 
-  /* 自定义滚动条 */
+  /* 自定义滚动条 - 黑色主题 */
   &::-webkit-scrollbar {
-    width: 4px;
+    width: 6px;
   }
 
   &::-webkit-scrollbar-track {
-    background: rgba(0, 0, 0, 0.05);
-    border-radius: 2px;
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 3px;
   }
 
   &::-webkit-scrollbar-thumb {
-    background: rgba(0, 0, 0, 0.2);
-    border-radius: 2px;
-
+    background: linear-gradient(135deg, #404040 0%, #2d2d2d 100%);
+    border-radius: 3px;
+    
     &:hover {
-      background: rgba(0, 0, 0, 0.3);
+      background: linear-gradient(135deg, #555555 0%, #404040 100%);
+    }
+  }
+
+  .menu-card {
+    width: 380px;
+    background: rgba(20, 20, 20, 0.95);
+    backdrop-filter: blur(20px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 16px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.8);
+    transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+    overflow: hidden;
+    
+    &::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 1px;
+      background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.2), transparent);
     }
   }
 
   &.collapsed {
-    .n-card {
+    .menu-card {
+      width: 64px;
       padding: 8px 4px;
+      
+      :deep(.n-card__content) {
+        padding: 8px 4px;
+      }
     }
   }
 }
 
-/* 折叠状态的垂直导航 */
+/* 折叠状态的垂直导航 - 黑色主题 */
 .collapsed-nav {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
   align-items: center;
-  padding: 4px 0;
+  padding: 8px 0;
 
   .expand-btn {
-    margin-bottom: 8px;
-    background: linear-gradient(135deg, #1890ff 0%, #36cfc9 100%);
-    color: white;
-    border: none;
+    margin-bottom: 12px;
+    background: linear-gradient(135deg, #333333 0%, #1a1a1a 100%);
+    color: #ffffff;
+    border: 1px solid #404040;
+    border-radius: 12px;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
     
     &:hover {
-      background: linear-gradient(135deg, #096dd9 0%, #13c2c2 100%);
+      background: linear-gradient(135deg, #404040 0%, #2d2d2d 100%);
+      border-color: #555555;
+      transform: scale(1.05);
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.6);
     }
   }
 
   .nav-divider {
-    width: 24px;
+    width: 32px;
     height: 1px;
-    background: rgba(0, 0, 0, 0.1);
-    margin: 4px 0;
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.2), transparent);
+    margin: 8px 0;
   }
 
   .nav-item {
-    width: 40px;
-    height: 40px;
-    border-radius: 8px;
+    width: 44px;
+    height: 44px;
+    border-radius: 12px;
     display: flex;
     align-items: center;
     justify-content: center;
-    transition: all 0.3s ease;
-    border: 1px solid transparent;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: rgba(30, 30, 30, 0.8);
+    backdrop-filter: blur(10px);
 
     &:hover {
-      transform: translateX(3px) scale(1.05);
-      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+      transform: translateX(4px) scale(1.08);
+      box-shadow: 0 6px 20px rgba(0, 0, 0, 0.7);
+      border-color: rgba(255, 255, 255, 0.3);
+      background: rgba(40, 40, 40, 0.9);
     }
     
     &.quick-menu-btn {
-      background: linear-gradient(135deg, #722ed1 0%, #eb2f96 100%);
-      color: white;
-      border: none;
+      background: linear-gradient(135deg, #2d2d2d 0%, #1a1a1a 100%);
+      color: #ffffff;
+      border: 1px solid #404040;
+      position: relative;
       
       &:hover {
-        background: linear-gradient(135deg, #531dab 0%, #c41d7f 100%);
-        transform: translateX(3px) scale(1.1);
+        background: linear-gradient(135deg, #404040 0%, #2d2d2d 100%);
+        transform: translateX(4px) scale(1.1);
+        border-color: #555555;
       }
       
       &::after {
-        content: '▼';
+        content: '⋮';
         position: absolute;
-        bottom: 2px;
-        right: 2px;
-        font-size: 8px;
-        opacity: 0.8;
+        bottom: 4px;
+        right: 4px;
+        font-size: 10px;
+        opacity: 0.6;
       }
     }
   }
@@ -733,41 +844,50 @@ const getButtonText = (item: any) => {
     .tooltip-title {
       font-weight: 600;
       margin-bottom: 2px;
+      color: #ffffff;
     }
     
     .tooltip-desc {
       font-size: 12px;
       opacity: 0.7;
+      color: #cccccc;
     }
   }
 }
 
-/* 展开状态的菜单 */
+/* 展开状态的菜单 - 黑色主题 */
 .expanded-menu {
   .quick-nav {
-    margin-bottom: 16px;
+    margin-bottom: 20px;
     
     .quick-nav-header {
       display: flex;
       justify-content: space-between;
       align-items: center;
-      margin-bottom: 12px;
+      margin-bottom: 16px;
+      padding: 12px 16px;
+      background: linear-gradient(135deg, rgba(255, 255, 255, 0.05) 0%, rgba(255, 255, 255, 0.02) 100%);
+      border-radius: 12px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
       
       .quick-nav-title {
         font-weight: 600;
-        font-size: 14px;
-        color: #333;
+        font-size: 15px;
+        color: #ffffff;
+        text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
       }
       
       .collapse-btn {
         display: flex;
         align-items: center;
-        gap: 4px;
+        gap: 6px;
         font-size: 12px;
-        color: #666;
+        color: #cccccc;
+        transition: all 0.2s ease;
         
         &:hover {
-          color: #1890ff;
+          color: #ffffff;
+          transform: translateX(-2px);
         }
       }
     }
@@ -775,184 +895,271 @@ const getButtonText = (item: any) => {
     .quick-nav-grid {
       display: grid;
       grid-template-columns: repeat(4, 1fr);
-      gap: 8px;
+      gap: 10px;
       
       .quick-nav-item {
-        height: 36px;
+        height: 42px;
         display: flex;
         align-items: center;
         justify-content: center;
-        gap: 4px;
+        gap: 6px;
         font-size: 11px;
-        transition: all 0.2s ease;
+        font-weight: 500;
+        transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
         border: 1px solid;
-        border-radius: 6px;
+        border-radius: 10px;
+        background: rgba(30, 30, 30, 0.6);
+        backdrop-filter: blur(10px);
+        position: relative;
+        overflow: hidden;
+        
+        &::before {
+          content: '';
+          position: absolute;
+          top: 0;
+          left: -100%;
+          width: 100%;
+          height: 100%;
+          background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.1), transparent);
+          transition: left 0.5s ease;
+        }
         
         &:hover {
-          transform: translateY(-1px);
-          box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+          transform: translateY(-2px) scale(1.02);
+          box-shadow: 0 6px 20px rgba(0, 0, 0, 0.7);
+          
+          &::before {
+            left: 100%;
+          }
         }
         
         &.active {
           font-weight: 600;
-          box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+          box-shadow: 0 4px 16px rgba(0, 0, 0, 0.6);
+          border-color: var(--group-color);
+          color: #ffffff;
+          background: linear-gradient(135deg, var(--group-color), rgba(0, 0, 0, 0.3));
         }
       }
     }
   }
 
   .tab-content {
-    min-height: 140px;
-    animation: fadeIn 0.3s ease;
+    min-height: 160px;
+    animation: fadeInUp 0.4s cubic-bezier(0.4, 0, 0.2, 1);
   }
 }
 
-/* 菜单组样式 */
+/* 菜单组样式 - 黑色主题 */
 .menu-group {
   .group-header {
     display: flex;
     align-items: center;
-    gap: 8px;
-    margin-bottom: 16px;
-    padding: 10px 14px;
-    background: linear-gradient(135deg, rgba(0, 0, 0, 0.02) 0%, rgba(0, 0, 0, 0.05) 100%);
-    border-radius: 8px;
+    gap: 10px;
+    margin-bottom: 20px;
+    padding: 16px 18px;
+    background: linear-gradient(135deg, rgba(255, 255, 255, 0.08) 0%, rgba(255, 255, 255, 0.03) 100%);
+    border-radius: 12px;
     font-weight: 600;
-    font-size: 14px;
-    color: #333;
-    border-left: 3px solid var(--group-color, #1890ff);
+    font-size: 15px;
+    color: #ffffff;
+    border-left: 4px solid var(--group-color, #666666);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    position: relative;
+    overflow: hidden;
+    
+    &::after {
+      content: '';
+      position: absolute;
+      top: 0;
+      right: 0;
+      width: 60px;
+      height: 100%;
+      background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.05));
+      pointer-events: none;
+    }
     
     .group-badge {
       margin-left: auto;
-      background: var(--group-color, #1890ff);
-      color: white;
-      padding: 2px 8px;
-      border-radius: 12px;
+      background: var(--group-color, #666666);
+      color: #ffffff;
+      padding: 4px 12px;
+      border-radius: 20px;
       font-size: 11px;
-      font-weight: 500;
+      font-weight: 600;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
     }
   }
 }
 
-/* 网格布局控制 */
+/* 横向滚动布局控制 - 黑色主题 */
 .control-grid {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  max-height: 200px;
+  overflow-y: auto;
+  padding: 8px 0;
+  
+  /* 自定义滚动条 */
+  &::-webkit-scrollbar {
+    height: 6px;
+    width: 6px;
+  }
+
+  &::-webkit-scrollbar-track {
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 3px;
+  }
+
+  &::-webkit-scrollbar-thumb {
+    background: linear-gradient(135deg, #404040 0%, #2d2d2d 100%);
+    border-radius: 3px;
+    
+    &:hover {
+      background: linear-gradient(135deg, #555555 0%, #404040 100%);
+    }
+  }
 
   .grid-item {
-    height: 50px;
+    flex: 0 0 auto;
+    min-width: 100px;
+    max-width: 140px;
+    height: 48px;
     display: flex;
-    flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 2px;
-    font-size: 11px;
-    transition: all 0.2s ease;
-    border-radius: 8px;
-    border: 1px solid transparent;
-    padding: 4px;
+    gap: 8px;
+    font-size: 12px;
+    font-weight: 500;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    border-radius: 12px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    padding: 8px 12px;
     text-align: center;
-    line-height: 1.2;
-    word-break: break-all;
     overflow: hidden;
+    background: rgba(30, 30, 30, 0.6);
+    backdrop-filter: blur(10px);
+    color: #ffffff;
+    position: relative;
+
+    &::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: linear-gradient(135deg, transparent 0%, var(--item-color, #666666)20 100%);
+      opacity: 0;
+      transition: opacity 0.3s ease;
+    }
 
     &:hover {
-      transform: translateY(-1px);
-      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
-      border-color: var(--item-color, #1890ff);
-      background: rgba(24, 144, 255, 0.05);
+      transform: translateY(-2px) scale(1.02);
+      box-shadow: 0 6px 20px rgba(0, 0, 0, 0.8);
+      border-color: var(--item-color, #666666);
+      background: rgba(40, 40, 40, 0.8);
+      
+      &::before {
+        opacity: 0.1;
+      }
     }
 
-    &.full-width {
-      grid-column: 1 / -1;
+    &:active {
+      transform: translateY(-1px) scale(0.98);
     }
 
-    /* 图标和文字布局优化 */
+    /* 横向布局：图标和文字水平排列 */
     :deep(.n-button__content) {
       display: flex;
-      flex-direction: column;
+      flex-direction: row;
       align-items: center;
-      gap: 2px;
+      gap: 6px;
       width: 100%;
       overflow: hidden;
+      color: inherit;
     }
 
-    /* 文字溢出处理 */
+    /* 图标大小调整 */
+    :deep(.n-button__icon) {
+      flex-shrink: 0;
+      width: 16px;
+      height: 16px;
+    }
+
+    /* 文字自适应，不换行 */
     :deep(.n-button__content > span:last-child) {
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
-      max-width: 100%;
-      font-size: 10px;
+      flex: 1;
+      font-size: 11px;
+      color: inherit;
+      text-align: left;
     }
   }
 }
 
 /* 折叠状态导航组间距 */
 .nav-group {
-  margin-bottom: 4px;
+  margin-bottom: 6px;
 }
 
-/* 菜单组样式 */
-.menu-group {
-  .group-title {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    margin: 0 0 12px 0;
-    font-size: 14px;
-    font-weight: 600;
-    color: #333;
-    padding: 8px 12px;
-    background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
-    border-radius: 8px;
-  }
-
-  .button-row {
-    margin-bottom: 8px;
-
-    &:last-child {
-      margin-bottom: 0;
-    }
+/* 头部按钮样式 */
+.header-btn {
+  color: #cccccc;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  transition: all 0.2s ease;
+  
+  &:hover {
+    color: #ffffff;
+    background: rgba(255, 255, 255, 0.1);
+    border-color: rgba(255, 255, 255, 0.2);
+    transform: scale(1.05);
   }
 }
 
-/* 过渡动画 */
-.slide-fade-enter-active {
-  transition: all 0.3s ease-out;
+/* 过渡动画 - 优化流畅度 */
+.menu-slide-enter-active {
+  transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-.slide-fade-leave-active {
-  transition: all 0.3s cubic-bezier(1.0, 0.5, 0.8, 1.0);
+.menu-slide-leave-active {
+  transition: all 0.3s cubic-bezier(0.6, 0, 0.8, 0.4);
 }
 
-.slide-fade-enter-from,
-.slide-fade-leave-to {
-  transform: translateX(-20px);
+.menu-slide-enter-from {
+  transform: translateX(-40px) scale(0.9);
   opacity: 0;
 }
 
-@keyframes fadeIn {
+.menu-slide-leave-to {
+  transform: translateX(-20px) scale(0.95);
+  opacity: 0;
+}
+
+@keyframes fadeInUp {
   from {
     opacity: 0;
-    transform: translateY(10px);
+    transform: translateY(20px);
   }
-
   to {
     opacity: 1;
     transform: translateY(0);
   }
 }
 
-/* 响应式设计 */
+/* 响应式设计 - 黑色主题适配 */
 @media (max-width: 768px) {
   .floating-menu {
     left: 10px;
     top: 60px;
 
     &:not(.collapsed) {
-      .n-card {
+      .menu-card {
         width: 340px !important;
       }
 
@@ -960,20 +1167,20 @@ const getButtonText = (item: any) => {
         grid-template-columns: repeat(3, 1fr);
         
         .quick-nav-item {
-          height: 32px;
+          height: 36px;
           font-size: 10px;
         }
       }
 
       .control-grid {
-        grid-template-columns: repeat(2, 1fr);
-        
         .grid-item {
-          height: 45px;
-          font-size: 10px;
+          min-width: 80px;
+          max-width: 120px;
+          height: 42px;
+          font-size: 11px;
           
           :deep(.n-button__content > span:last-child) {
-            font-size: 9px;
+            font-size: 10px;
           }
         }
       }
@@ -989,7 +1196,7 @@ const getButtonText = (item: any) => {
 @media (max-width: 480px) {
   .floating-menu {
     &:not(.collapsed) {
-      .n-card {
+      .menu-card {
         width: 300px !important;
       }
 
@@ -998,10 +1205,11 @@ const getButtonText = (item: any) => {
       }
 
       .control-grid {
-        grid-template-columns: 1fr;
-
         .grid-item {
+          min-width: 70px;
+          max-width: 100px;
           height: 40px;
+          font-size: 10px;
           
           :deep(.n-button__content > span:last-child) {
             font-size: 9px;
@@ -1012,58 +1220,128 @@ const getButtonText = (item: any) => {
   }
 }
 
-/* Naive UI 组件自定义样式 */
+/* Naive UI 组件自定义样式 - 黑色主题 */
+:deep(.n-card) {
+  background: transparent !important;
+  border: none !important;
+}
+
 :deep(.n-card-header) {
-  padding: 12px 16px;
-  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+  padding: 16px 20px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.05) 0%, rgba(255, 255, 255, 0.02) 100%);
 
   .n-card-header__main {
     font-weight: 600;
-    color: #2c3e50;
+    color: #ffffff;
+    font-size: 16px;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
   }
 }
 
 :deep(.n-card__content) {
-  padding: 16px;
+  padding: 20px;
+  background: transparent;
 }
 
 :deep(.n-button) {
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  
   &.n-button--primary-type {
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    border: none;
+    background: linear-gradient(135deg, #2d2d2d 0%, #1a1a1a 100%);
+    border: 1px solid #404040;
+    color: #ffffff;
 
     &:hover {
-      background: linear-gradient(135deg, #5a6fd8 0%, #6a4190 100%);
+      background: linear-gradient(135deg, #404040 0%, #2d2d2d 100%);
+      border-color: #555555;
+      transform: translateY(-1px);
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.6);
     }
   }
 
   &.n-button--default-type {
+    background: rgba(30, 30, 30, 0.6);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    color: #ffffff;
+    
     &:hover {
-      background: rgba(103, 194, 58, 0.1);
-      border-color: #67c23a;
-      color: #67c23a;
+      background: rgba(40, 40, 40, 0.8);
+      border-color: rgba(255, 255, 255, 0.2);
+      transform: translateY(-1px);
+    }
+  }
+  
+  &.n-button--quaternary-type {
+    background: transparent;
+    border: none;
+    color: #cccccc;
+    
+    &:hover {
+      background: rgba(255, 255, 255, 0.1);
+      color: #ffffff;
     }
   }
 }
 
-/* 特殊效果 */
+/* 特殊效果 - 黑色主题霓虹效果 */
 .floating-menu {
   &::before {
     content: '';
     position: absolute;
-    top: -2px;
-    left: -2px;
-    right: -2px;
-    bottom: -2px;
-    background: linear-gradient(45deg, transparent 30%, rgba(103, 194, 58, 0.1) 50%, transparent 70%);
-    border-radius: 12px;
+    top: -1px;
+    left: -1px;
+    right: -1px;
+    bottom: -1px;
+    background: linear-gradient(45deg, 
+      transparent 30%, 
+      rgba(255, 255, 255, 0.1) 50%, 
+      transparent 70%);
+    border-radius: 17px;
     z-index: -1;
     opacity: 0;
-    transition: opacity 0.3s ease;
+    transition: opacity 0.4s ease;
   }
 
   &:hover::before {
     opacity: 1;
+    animation: shimmer 2s infinite;
+  }
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+/* 工具提示样式优化 */
+:deep(.n-tooltip__content) {
+  background: rgba(20, 20, 20, 0.95) !important;
+  color: #ffffff !important;
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+  backdrop-filter: blur(10px);
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.6);
+}
+
+/* 下拉菜单样式 */
+:deep(.n-dropdown-menu) {
+  background: rgba(20, 20, 20, 0.95) !important;
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+  backdrop-filter: blur(20px);
+  border-radius: 12px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.8);
+}
+
+:deep(.n-dropdown-option) {
+  color: #ffffff !important;
+  
+  &:hover {
+    background: rgba(255, 255, 255, 0.1) !important;
   }
 }
 </style>
