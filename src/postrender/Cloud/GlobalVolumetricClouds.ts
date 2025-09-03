@@ -11,6 +11,10 @@ interface CloudsOption {
   cloudTopRadius: number
   currentWindVectorWC: Cesium.Cartesian3
   maxViewingDistance: number
+  absorptionCoeff: number
+  scatteringAniso: number
+  lightSteps: number
+  densitySteps: number
 }
 
 class GlobalVolumetricClouds {
@@ -27,14 +31,18 @@ class GlobalVolumetricClouds {
     // 默认配置
     const defaultOption: CloudsOption = {
       windSpeedRatio: 0.0004,
-      cloudCover: 0.63,
-      cloudBase: 200,
-      cloudTop: 900,
-      cloudThickness: 7000,
-      cloudBaseRadius: 6378137 + 2000,
-      cloudTopRadius: 6378137 + 6000,
+      cloudCover: 0.5,
+      cloudBase: 1000,
+      cloudTop: 3000,
+      cloudThickness: 2000,
+      cloudBaseRadius: 6378137 + 1000,
+      cloudTopRadius: 6378137 + 3000,
       currentWindVectorWC: new Cesium.Cartesian3(100, 0, 0),
-      maxViewingDistance: 500000.0
+      maxViewingDistance: 300000.0,
+      absorptionCoeff: 0.5,
+      scatteringAniso: 0.3,
+      lightSteps: 6,
+      densitySteps: 60
     }
 
     this.option = { ...defaultOption, ...option }
@@ -71,6 +79,10 @@ class GlobalVolumetricClouds {
         cloudThickness: this._uniforms.cloudThickness,
         cloudBaseRadius: this._uniforms.cloudBaseRadius,
         cloudTopRadius: this._uniforms.cloudTopRadius,
+        absorptionCoeff: this._uniforms.absorptionCoeff,
+        scatteringAniso: this._uniforms.scatteringAniso,
+        lightSteps: this._uniforms.lightSteps,
+        densitySteps: this._uniforms.densitySteps
       }
     })
 
@@ -115,6 +127,12 @@ class GlobalVolumetricClouds {
     this._cloudsPostProcessStage.uniforms.cloudThickness = cloudThickness
     this._cloudsPostProcessStage.uniforms.cloudBaseRadius = cloudBaseRadius
     this._cloudsPostProcessStage.uniforms.cloudTopRadius = cloudTopRadius
+    
+    // 更新新的参数
+    this._cloudsPostProcessStage.uniforms.absorptionCoeff = this._uniforms.absorptionCoeff
+    this._cloudsPostProcessStage.uniforms.scatteringAniso = this._uniforms.scatteringAniso
+    this._cloudsPostProcessStage.uniforms.lightSteps = this._uniforms.lightSteps
+    this._cloudsPostProcessStage.uniforms.densitySteps = this._uniforms.densitySteps
   }
 
   /**
@@ -125,7 +143,10 @@ class GlobalVolumetricClouds {
 
     this._gui = new dat.GUI()
     const folder = this._gui.addFolder('云层')
+    const qualityFolder = this._gui.addFolder('质量设置')
+    const lightingFolder = this._gui.addFolder('光照设置')
 
+    // 基础云层参数
     folder
       .add(this._uniforms, 'windSpeedRatio', 0, 0.0008)
       .name('风速')
@@ -165,13 +186,6 @@ class GlobalVolumetricClouds {
       })
 
     folder
-      .add(this._uniforms, 'cloudThickness', 0, 10000)
-      .name('云层厚度')
-      .onChange(() => {
-        this.update()
-      })
-
-    folder
       .add(this._uniforms, 'maxViewingDistance', 100000, 500000)
       .name('最大可视距离')
       .onChange(() => {
@@ -180,7 +194,49 @@ class GlobalVolumetricClouds {
         }
       })
 
+    // 质量设置
+    qualityFolder
+      .add(this._uniforms, 'densitySteps', 40, 120)
+      .name('密度采样步数')
+      .step(1)
+      .onChange(() => {
+        if (this._cloudsPostProcessStage) {
+          this._cloudsPostProcessStage.uniforms.densitySteps = this._uniforms.densitySteps
+        }
+      })
+
+    qualityFolder
+      .add(this._uniforms, 'lightSteps', 4, 12)
+      .name('光照采样步数')
+      .step(1)
+      .onChange(() => {
+        if (this._cloudsPostProcessStage) {
+          this._cloudsPostProcessStage.uniforms.lightSteps = this._uniforms.lightSteps
+        }
+      })
+
+    // 光照设置
+    lightingFolder
+      .add(this._uniforms, 'absorptionCoeff', 0.1, 2.0)
+      .name('吸收系数')
+      .onChange(() => {
+        if (this._cloudsPostProcessStage) {
+          this._cloudsPostProcessStage.uniforms.absorptionCoeff = this._uniforms.absorptionCoeff
+        }
+      })
+
+    lightingFolder
+      .add(this._uniforms, 'scatteringAniso', -0.8, 0.8)
+      .name('散射各向异性')
+      .onChange(() => {
+        if (this._cloudsPostProcessStage) {
+          this._cloudsPostProcessStage.uniforms.scatteringAniso = this._uniforms.scatteringAniso
+        }
+      })
+
     folder.open()
+    qualityFolder.open()
+    lightingFolder.open()
   }
 
   /**
@@ -188,25 +244,42 @@ class GlobalVolumetricClouds {
    */
   getFragmentShader(): string {
     return /*glsl*/`
-      precision highp float; 
-   uniform float realPlanetRadius; //地球半径
-    uniform float windSpeedRatio;//风速
-   uniform float cloudCover;//云量
-   uniform float cloudBase;//云的底部高度
-   uniform float cloudTop;//云的顶部高度
-   uniform vec3 windVector;//方向
-   uniform float cloudThickness; //云层厚度
-   uniform float cloudBaseRadius;//云层底部半径
-   uniform float cloudTopRadius; //云层顶部半径
+   uniform sampler2D colorTexture;
+   in vec2 v_textureCoordinates;
+   
+   uniform float realPlanetRadius;
+   uniform float windSpeedRatio;
+   uniform float cloudCover;
+   uniform float cloudBase;
+   uniform float cloudTop;
+   uniform vec3 windVector;
+   uniform float cloudThickness;
+   uniform float cloudBaseRadius;
+   uniform float cloudTopRadius;
+   uniform float absorptionCoeff;
+   uniform float scatteringAniso;
+   uniform float lightSteps;
+   uniform float densitySteps;
+   
    const float PI = 3.14159265359;
    const float TWO_PI = 6.28318530718;
    const float FOUR_PI = 12.5663706144;
-   #define CLOUDS_MAX_LOD 1
-   #define CLOUDS_MARCH_STEP 500.0 //外部每次步进
-   #define CLOUDS_DENS_MARCH_STEP 100.0 //云内每次步进
-   #define MAXIMUM_CLOUDS_STEPS 300 //最大步进次数
-   #define CLOUDS_MAX_VIEWING_DISTANCE 250000.0
-   //射线与球体相交 可参考 https://zhuanlan.zhihu.com/p/645281439
+   
+   // 使用动态参数而不是固定宏定义
+   #define CLOUDS_MAX_VIEWING_DISTANCE 300000.0
+   
+   // Beer's Law - 更物理准确的光照衰减
+   float BeersLaw(float dist, float absorption) {
+    return exp(-dist * absorption);
+   }
+   
+   // Henyey-Greenstein相位函数 - 更真实的散射
+   float HenyeyGreenstein(float g, float mu) {
+    float gg = g * g;
+    return (1.0 / (4.0 * PI)) * ((1.0 - gg) / pow(1.0 + gg - 2.0 * g * mu, 1.5));
+   }
+   
+   // 射线与球体相交
    vec2 raySphereIntersect(vec3 r0, vec3 rd, float sr) {
     float a = dot(rd, rd);
     float b = 2.0 * dot(rd, r0);
@@ -219,204 +292,234 @@ class GlobalVolumetricClouds {
      (-b + squaredD) / (2.0 * a)
     );
    }
-   float saturate (float value) {
+   
+   float saturate(float value) {
     return clamp(value, 0.0, 1.0);
    }
-   float isotropic() {
-    return 0.07957747154594767; //1.0 / (4.0 * PI);
-   }
-   float rayleigh(float costh) {
-    return (3.0 / (16.0 * PI)) * (1.0 + pow(costh, 2.0));
-   }
-   float Schlick(float k, float costh) {
-    return (1.0 - k * k) / (FOUR_PI * pow(1.0 - k * costh, 2.0));
-   } 
-   float g = 0.9;
+   
+   // 改进的hash函数
    float hash(float p) {
-    p = fract(p * .1031);
+    p = fract(p * 0.1031);
     p *= p + 33.33;
     p *= p + p;
     return fract(p);
    }
-   //噪声
-   float noise(in vec3 x) {
+   
+   float hash(vec2 p) {
+    vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
+   }
+   
+   // 改进的噪声函数
+   float noise(vec3 x) {
     vec3 p = floor(x);
     vec3 f = fract(x);
-    f = f*f*(3.0 - 2.0*f);
-    float n = p.x + p.y*157.0 + 113.0*p.z;
-    return mix(mix(mix( hash(n+ 0.0), hash(n+ 1.0),f.x),
-    mix( hash(n+157.0), hash(n+158.0),f.x),f.y),
-    mix(mix( hash(n+113.0), hash(n+114.0),f.x),
-    mix(hash(n+270.0), hash(n+271.0),f.x),f.y),f.z);
+    f = f * f * (3.0 - 2.0 * f);
+    
+    float n = p.x + p.y * 157.0 + 113.0 * p.z;
+    return mix(mix(mix(hash(n + 0.0), hash(n + 1.0), f.x),
+                   mix(hash(n + 157.0), hash(n + 158.0), f.x), f.y),
+               mix(mix(hash(n + 113.0), hash(n + 114.0), f.x),
+                   mix(hash(n + 270.0), hash(n + 271.0), f.x), f.y), f.z);
    }
-   //云的密度
-   float cloudDensity(vec3 p, vec3 wind, int lod, inout float heightRatio) {
-    float finalCoverage = cloudCover;
-    if (finalCoverage <= 0.1) {
+   
+   // FBM噪声 - 简化版本
+   float fbm(vec3 p, bool lowRes) {
+    float f = 0.0;
+    float scale = 0.5;
+    float factor = 2.0;
+    
+    int octaves = lowRes ? 2 : 4;
+    
+    for (int i = 0; i < 4; i++) {
+     if (i >= octaves) break;
+     f += scale * noise(p);
+     p *= factor;
+     scale *= 0.5;
+    }
+    
+    return f;
+   }
+   
+   // 改进的云密度函数
+   float cloudDensity(vec3 p, vec3 wind, bool lowRes, out float heightRatio) {
+    if (cloudCover <= 0.01) {
+     heightRatio = 0.0;
      return 0.0;
     }
+    
     float height = length(p) - realPlanetRadius;
-    heightRatio = (height - cloudBase) / cloudThickness;
-    float positionResolution = 0.002;
-    p = p * positionResolution + wind;
-    float shape = noise(p * 0.3);
-    float shapeHeight = noise(p * 0.05);
-    float bn = 0.50000 * noise(p); p = p * 2.0;
-    if( lod>=1 ) {
-     bn += 0.20000 * noise(p); p = p * 2.11;
-    }
-    float cumuloNimbus = saturate((shapeHeight - 0.5) * 2.0);
-    cumuloNimbus *= saturate(1.0 - pow(heightRatio - 0.5, 2.0) * 4.0);
-    float cumulus = saturate(1.0 - pow(heightRatio - 0.25, 2.0) * 25.0) * shapeHeight;
-    float stratoCumulus = saturate(1.0 - pow(heightRatio - 0.12, 2.0) * 60.0) * (1.0 - shapeHeight);
-    float dens = saturate(stratoCumulus + cumulus + cumuloNimbus) * 2.0 * finalCoverage;
-    dens -= 1.0 - shape;
-    dens -= bn;
-    return clamp(dens, 0.0, 1.0);
+    heightRatio = saturate((height - cloudBase) / cloudThickness);
+    
+    // 应用风向偏移
+    vec3 samplePos = p * 0.00005 + wind * 0.1;
+    
+    // 获取基础噪声
+    float density = fbm(samplePos, lowRes) * 0.5 + 0.5;
+    
+    // 根据云量调整密度阈值
+    float threshold = 1.0 - cloudCover;
+    density = saturate((density - threshold) / (1.0 - threshold));
+    
+    // 高度衰减 - 云层在中间高度密度最大
+    float heightFactor = 4.0 * heightRatio * (1.0 - heightRatio);
+    density *= heightFactor;
+    
+    return density;
    }
-   in vec2 v_textureCoordinates;
-   vec3 skyAmbientColor = vec3(0.705, 0.850, 0.952); //0.219, 0.380, 0.541
-   vec3 groundAmbientColor = vec3(0.741, 0.898, 0.823); //0.639, 0.858, 0.721
-   float distanceQualityR = 0.00005; // LOD/quality ratio
-   float minDistance = 10.0; // avoid cloud in cockpit 
-   vec4 calculate_clouds(
-   vec3 start,
-   vec3 dir,
-   float maxDistance,
-   vec3 light_dir,
-   vec3 wind
-   ) {
-    vec4 cloud = vec4(0.0, 0.0, 0.0, 1.0);
+   
+   // 光照行进
+   float lightmarch(vec3 position, vec3 lightDir, float lightSteps) {
+    float totalDensity = 0.0;
+    float stepSize = 300.0;
+    
+    for (int step = 0; step < 12; step++) {
+     if (float(step) >= lightSteps) break;
+     
+     position += lightDir * stepSize;
+     
+     float height = length(position) - realPlanetRadius;
+     if (height < cloudBase || height > cloudTop) break;
+     
+     float heightRatio;
+     float lightSample = cloudDensity(position, windVector, true, heightRatio);
+     totalDensity += lightSample * stepSize * 0.001;
+    }
+    
+    return BeersLaw(totalDensity, absorptionCoeff);
+   }
+   
+   // 主要的云渲染函数
+   vec4 calculate_clouds(vec3 start, vec3 dir, float maxDistance, vec3 lightDir, vec3 wind) {
+    // 射线-球体相交计算
     vec2 toTop = raySphereIntersect(start, dir, cloudTopRadius);
-    vec2 toCloudBase = raySphereIntersect(start, dir, cloudBaseRadius);
+    vec2 toBase = raySphereIntersect(start, dir, cloudBaseRadius);
+    
     float startHeight = length(start) - realPlanetRadius;
-    float absoluteMaxDistance = CLOUDS_MAX_VIEWING_DISTANCE;
-    float tmin = minDistance;
-    float tmax = maxDistance;
+    float tmin = 100.0;
+    float tmax = min(maxDistance, CLOUDS_MAX_VIEWING_DISTANCE);
+    
+    // 计算射线进入和退出云层的距离
     if (startHeight > cloudTop) {
-     if (toTop.x < 0.0) return vec4(0.0); // no intersection with cloud layer
-      tmin = toTop.x;
-     if (toCloudBase.x > 0.0) {
-      tmax = min(toCloudBase.x, maxDistance);
-     }
-     else {
-      tmax = min(toTop.y, maxDistance);
+     if (toTop.x < 0.0) return vec4(0.0);
+     tmin = max(tmin, toTop.x);
+     if (toBase.x > 0.0) {
+      tmax = min(tmax, toBase.x);
+     } else {
+      tmax = min(tmax, toTop.y);
      }
     } else if (startHeight < cloudBase) {
-     tmin = toCloudBase.y;
-     tmax = min(toTop.y, maxDistance);
+     if (toBase.y < 0.0) return vec4(0.0);
+     tmin = max(tmin, toBase.y);
+     tmax = min(tmax, toTop.y);
     } else {
-     if (toCloudBase.x > 0.0) {
-      tmax = min(toCloudBase.x, maxDistance);
-     }
-     else {
-      tmax = min(toTop.y, maxDistance);
+     if (toBase.x > 0.0) {
+      tmax = min(tmax, toBase.x);
+     } else {
+      tmax = min(tmax, toTop.y);
      }
     }
-    tmin = max(tmin, minDistance);
-    tmax = min(tmax, absoluteMaxDistance);
-    if (tmax < tmin) return vec4(0.0); // object obstruction
-    float rayLength = tmax - tmin;//步进总距离
-    float longMarchStep = rayLength / float(MAXIMUM_CLOUDS_STEPS);//步进距离/步进次数=每次步进的距离
-    longMarchStep = max(longMarchStep, CLOUDS_MARCH_STEP);//每次步进多少
-    float shortMarchStep = CLOUDS_DENS_MARCH_STEP;
-    float numberApproachSteps = (CLOUDS_MARCH_STEP / CLOUDS_DENS_MARCH_STEP) * 2.0;
-    float distance = tmin;//
-    float dens = 0.0;
-    float marchStep;
-    float lastDensity; 
-    float kInScattering = 0.99;
-    float dotLightRay = dot(dir, light_dir);
-    float inScattering = Schlick(kInScattering, dotLightRay);
-    float outScattering = isotropic(); 
-    float sunScatteringPhase = mix(outScattering, inScattering, dotLightRay);
-    float ambientScatteringPhase = isotropic();
-    bool inCloud = false;
-    float stepsBeforeExitingCloud = 0.0;
-    for (int i = 0; i < MAXIMUM_CLOUDS_STEPS; i++) {
+    
+    if (tmax <= tmin) return vec4(0.0);
+    
+    // 动态步长
+    float stepSize = (tmax - tmin) / densitySteps;
+    stepSize = max(stepSize, 50.0);
+    
+    // 时间噪声偏移 - 减少条带伪影
+    float timeOffset = hash(gl_FragCoord.xy * 0.1 + czm_frameNumber * 0.01) * stepSize;
+    float distance = tmin + timeOffset;
+    
+    float totalTransmittance = 1.0;
+    vec3 lightAccumulation = vec3(0.0);
+    
+    // Henyey-Greenstein相位函数
+    float phase = HenyeyGreenstein(scatteringAniso, dot(dir, lightDir));
+    
+    for (int i = 0; i < 120; i++) {
+     if (distance >= tmax || float(i) >= densitySteps) break;
+     
      vec3 position = start + dir * distance;
-     int qualityRatio = int(distance * distanceQualityR);
-     int lod = CLOUDS_MAX_LOD - qualityRatio;
+     
      float heightRatio;
-     if (inCloud == true) {
-      marchStep = shortMarchStep;
-     } else {
-      marchStep = longMarchStep;
-      lod = 0;
+     float density = cloudDensity(position, wind, false, heightRatio);
+     
+     if (density > 0.01) {
+      // 计算光照传输
+      float lightTransmittance = lightmarch(position, lightDir, lightSteps);
+      
+      // 计算散射颜色
+      vec3 scatterColor = czm_lightColor * lightTransmittance * phase;
+      
+      // 应用密度衰减
+      float stepTransmittance = BeersLaw(density * stepSize * 0.01, absorptionCoeff);
+      
+      // 累积光照
+      lightAccumulation += totalTransmittance * density * scatterColor * stepSize * 0.01;
+      
+      // 更新透射率
+      totalTransmittance *= stepTransmittance;
+      
+      // 早期退出优化
+      if (totalTransmittance < 0.01) break;
      }
-     dens = cloudDensity(position, wind, lod, heightRatio);
-     if(dens > 0.01) {
-      if (inCloud != true) {
-       inCloud = true;
-       stepsBeforeExitingCloud = numberApproachSteps;
-       distance = clamp(distance - CLOUDS_MARCH_STEP, tmin, tmax); // 第一次进入云 回退一步
-       continue;
-      }
-      float deltaDens = clamp((dens - lastDensity) * 10.0, -1.0, 1.0);
-      float lighting = (abs(deltaDens - dotLightRay) / 2.0) * clamp((heightRatio - 0.02) * 20.0, 0.5, 1.0);
-      lastDensity = dens;
-      float scatteringCoeff = 0.15 * dens;
-      float extinctionCoeff = 0.01 * dens;
-      cloud.a *= exp(-extinctionCoeff * marchStep);
-      float sunIntensityAtSurface = clamp(0.2 - dens, 0.0, 1.0);
-      vec3 sunLight = lighting * czm_lightColor * sunIntensityAtSurface * czm_lightColor.z;
-      vec3 ambientSun = czm_lightColor * sunIntensityAtSurface * czm_lightColor.z * isotropic();
-      vec3 skyAmbientLight = (skyAmbientColor * czm_lightColor.z + ambientSun);
-      vec3 groundAmbientLight = (groundAmbientColor * czm_lightColor.z * 0.5 + ambientSun);
-      vec3 ambientLight = mix(groundAmbientLight, skyAmbientLight, heightRatio);
-      vec3 stepScattering = scatteringCoeff * marchStep * (sunScatteringPhase * sunLight + ambientScatteringPhase * ambientLight);
-      cloud.rgb += cloud.a * stepScattering;
-      if (cloud.a < 0.01) {
-       cloud.a = 0.0;
-       break;
-      }
-     } else {
-      if (stepsBeforeExitingCloud > 0.0) {
-       stepsBeforeExitingCloud--;
-      }
-      else {
-       inCloud = false;
-      }
-     }
-     distance += marchStep;
-     //步进距离超出总的距离 退出
-     if (distance > tmax) {
-      break;
-     }
+     
+     distance += stepSize;
     }
-    cloud.a = (1.0 - cloud.a);
-    return cloud;
+    
+    float alpha = 1.0 - totalTransmittance;
+    return vec4(lightAccumulation, alpha);
    }
-   uniform sampler2D colorTexture;
+   
    void main() {
     vec4 color = texture(colorTexture, v_textureCoordinates);
+    
+    // 获取深度信息
     vec4 rawDepthColor = texture(czm_globeDepthTexture, v_textureCoordinates);
     float depth = czm_unpackDepth(rawDepthColor);
     if (depth == 0.0) {
-     depth = 1.0; 
+     depth = 1.0;
     }
+    
+    // 计算世界坐标
     vec4 positionEC = czm_windowToEyeCoordinates(gl_FragCoord.xy, depth);
     vec4 worldCoordinate = czm_inverseView * positionEC;
     vec3 vWorldPosition = worldCoordinate.xyz / worldCoordinate.w;
+    
     vec3 posToEye = vWorldPosition - czm_viewerPositionWC;
     vec3 direction = normalize(posToEye);
     vec3 lightDirection = normalize(czm_sunPositionWC);
+    
     float distance = length(posToEye);
     if (depth == 1.0) {
      distance = CLOUDS_MAX_VIEWING_DISTANCE;
     }
+    
+    // 计算风向偏移
     vec3 wind = windVector * czm_frameNumber * windSpeedRatio;
+    
+    // 渲染云层
     vec4 clouds = calculate_clouds(
-     czm_viewerPositionWC, // the position of the camera
-     direction, // the camera vector (ray direction of this pixel)
-     distance, // max dist, essentially the scene depth
-     lightDirection, // light direction
+     czm_viewerPositionWC,
+     direction,
+     distance,
+     lightDirection,
      wind
     );
-    clouds.rgb *= 3.0;
-    color = mix(color, clouds, clouds.a * clouds.a );
-    float exposure = 1.2;
-    color = vec4(1.0 - exp(-exposure * color)); 
+    
+    // 增强云的亮度和对比度
+    if (clouds.a > 0.0) {
+     clouds.rgb *= 2.0;
+     
+     // 添加环境光
+     vec3 ambientColor = vec3(0.3, 0.4, 0.6) * 0.2;
+     clouds.rgb += ambientColor * clouds.a;
+     
+     // 应用云层到场景
+     color.rgb = mix(color.rgb, clouds.rgb, clouds.a);
+    }
+    
     out_FragColor = color;
    }
     `
@@ -493,6 +596,50 @@ class GlobalVolumetricClouds {
     this._uniforms.windSpeedRatio = windSpeedRatio
     if (this._cloudsPostProcessStage) {
       this._cloudsPostProcessStage.uniforms.windSpeedRatio = windSpeedRatio
+    }
+  }
+
+  /**
+   * 设置渲染质量
+   */
+  setRenderQuality(densitySteps: number, lightSteps: number) {
+    this._uniforms.densitySteps = densitySteps
+    this._uniforms.lightSteps = lightSteps
+    if (this._cloudsPostProcessStage) {
+      this._cloudsPostProcessStage.uniforms.densitySteps = densitySteps
+      this._cloudsPostProcessStage.uniforms.lightSteps = lightSteps
+    }
+  }
+
+  /**
+   * 设置光照参数
+   */
+  setLightingParams(absorptionCoeff: number, scatteringAniso: number) {
+    this._uniforms.absorptionCoeff = absorptionCoeff
+    this._uniforms.scatteringAniso = scatteringAniso
+    if (this._cloudsPostProcessStage) {
+      this._cloudsPostProcessStage.uniforms.absorptionCoeff = absorptionCoeff
+      this._cloudsPostProcessStage.uniforms.scatteringAniso = scatteringAniso
+    }
+  }
+
+  /**
+   * 获取当前渲染质量设置
+   */
+  getRenderQuality() {
+    return {
+      densitySteps: this._uniforms.densitySteps,
+      lightSteps: this._uniforms.lightSteps
+    }
+  }
+
+  /**
+   * 获取当前光照参数
+   */
+  getLightingParams() {
+    return {
+      absorptionCoeff: this._uniforms.absorptionCoeff,
+      scatteringAniso: this._uniforms.scatteringAniso
     }
   }
 }
