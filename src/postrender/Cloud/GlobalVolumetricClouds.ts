@@ -1,3 +1,13 @@
+/**
+ * @description 用于创建和管理全球体积云效果, 用Cesium的PostProcessStage实现
+ * @author 落叶Rakuyou
+ * @date 2025-09-03
+ * @version 0.1.0
+ * @example
+ * const clouds = new GlobalVolumetricClouds(viewer);
+ * clouds.init();
+ */
+
 import * as Cesium from 'cesium'
 import * as dat from 'dat.gui'
 
@@ -15,6 +25,7 @@ interface CloudsOption {
   scatteringAniso: number
   lightSteps: number
   densitySteps: number
+  edgeSoftness: number // 新增：边缘软化程度
 }
 
 class GlobalVolumetricClouds {
@@ -38,11 +49,12 @@ class GlobalVolumetricClouds {
       cloudBaseRadius: 6378137 + 1000,
       cloudTopRadius: 6378137 + 3000,
       currentWindVectorWC: new Cesium.Cartesian3(100, 0, 0),
-      maxViewingDistance: 300000.0,
+      maxViewingDistance: 500000.0, // 增加到500km
       absorptionCoeff: 0.5,
       scatteringAniso: 0.3,
       lightSteps: 6,
-      densitySteps: 60
+      densitySteps: 60,
+      edgeSoftness: 0.1 // 边缘软化程度，默认为云层厚度的10%
     }
 
     this.option = { ...defaultOption, ...option }
@@ -82,7 +94,9 @@ class GlobalVolumetricClouds {
         absorptionCoeff: this._uniforms.absorptionCoeff,
         scatteringAniso: this._uniforms.scatteringAniso,
         lightSteps: this._uniforms.lightSteps,
-        densitySteps: this._uniforms.densitySteps
+        densitySteps: this._uniforms.densitySteps,
+        edgeSoftness: this._uniforms.edgeSoftness,
+        maxViewingDistance: this._uniforms.maxViewingDistance
       }
     })
 
@@ -133,6 +147,8 @@ class GlobalVolumetricClouds {
     this._cloudsPostProcessStage.uniforms.scatteringAniso = this._uniforms.scatteringAniso
     this._cloudsPostProcessStage.uniforms.lightSteps = this._uniforms.lightSteps
     this._cloudsPostProcessStage.uniforms.densitySteps = this._uniforms.densitySteps
+    this._cloudsPostProcessStage.uniforms.edgeSoftness = this._uniforms.edgeSoftness
+    this._cloudsPostProcessStage.uniforms.maxViewingDistance = this._uniforms.maxViewingDistance
   }
 
   /**
@@ -191,6 +207,15 @@ class GlobalVolumetricClouds {
       .onChange(() => {
         if (this._cloudsPostProcessStage) {
           this._cloudsPostProcessStage.uniforms.maxViewingDistance = this._uniforms.maxViewingDistance
+        }
+      })
+
+    folder
+      .add(this._uniforms, 'edgeSoftness', 0.05, 0.3)
+      .name('边缘软化')
+      .onChange(() => {
+        if (this._cloudsPostProcessStage) {
+          this._cloudsPostProcessStage.uniforms.edgeSoftness = this._uniforms.edgeSoftness
         }
       })
 
@@ -260,13 +285,12 @@ class GlobalVolumetricClouds {
    uniform float scatteringAniso;
    uniform float lightSteps;
    uniform float densitySteps;
+   uniform float edgeSoftness;
+   uniform float maxViewingDistance;
    
    const float PI = 3.14159265359;
    const float TWO_PI = 6.28318530718;
    const float FOUR_PI = 12.5663706144;
-   
-   // 使用动态参数而不是固定宏定义
-   #define CLOUDS_MAX_VIEWING_DISTANCE 300000.0
    
    // Beer's Law - 更物理准确的光照衰减
    float BeersLaw(float dist, float absorption) {
@@ -311,7 +335,7 @@ class GlobalVolumetricClouds {
     return fract((p3.x + p3.y) * p3.z);
    }
    
-   // 改进的噪声函数
+   // 改进的噪声函数 - 添加更多变化
    float noise(vec3 x) {
     vec3 p = floor(x);
     vec3 f = fract(x);
@@ -324,7 +348,7 @@ class GlobalVolumetricClouds {
                    mix(hash(n + 270.0), hash(n + 271.0), f.x), f.y), f.z);
    }
    
-   // FBM噪声 - 简化版本
+   // 改进的FBM噪声 - 添加涡旋效果
    float fbm(vec3 p, bool lowRes) {
     float f = 0.0;
     float scale = 0.5;
@@ -332,17 +356,24 @@ class GlobalVolumetricClouds {
     
     int octaves = lowRes ? 2 : 4;
     
+    // 添加旋转矩阵以增加复杂性
+    mat3 rotMatrix = mat3(
+     0.0, 0.8, 0.6,
+     -0.8, 0.36, -0.48,
+     -0.6, -0.48, 0.64
+    );
+    
     for (int i = 0; i < 4; i++) {
      if (i >= octaves) break;
      f += scale * noise(p);
-     p *= factor;
+     p = rotMatrix * p * factor; // 旋转采样位置
      scale *= 0.5;
     }
     
     return f;
    }
    
-   // 改进的云密度函数
+   // 改进的云密度函数 - 添加边缘软化
    float cloudDensity(vec3 p, vec3 wind, bool lowRes, out float heightRatio) {
     if (cloudCover <= 0.01) {
      heightRatio = 0.0;
@@ -352,6 +383,12 @@ class GlobalVolumetricClouds {
     float height = length(p) - realPlanetRadius;
     heightRatio = saturate((height - cloudBase) / cloudThickness);
     
+    // 边缘软化 - 使用可配置的软化参数
+    float edgeFadeDistance = cloudThickness * edgeSoftness;
+    float bottomFade = saturate((height - cloudBase) / edgeFadeDistance);
+    float topFade = saturate((cloudTop - height) / edgeFadeDistance);
+    float edgeFactor = bottomFade * topFade;
+    
     // 应用风向偏移
     vec3 samplePos = p * 0.00005 + wind * 0.1;
     
@@ -360,19 +397,36 @@ class GlobalVolumetricClouds {
     
     // 根据云量调整密度阈值
     float threshold = 1.0 - cloudCover;
-    density = saturate((density - threshold) / (1.0 - threshold));
+    density = saturate((density - threshold) / max(1.0 - threshold, 0.1)); // 防止除零
     
-    // 高度衰减 - 云层在中间高度密度最大
-    float heightFactor = 4.0 * heightRatio * (1.0 - heightRatio);
+    // 改进高度衰减 - 使云层分布更均匀
+    float heightFactor = 1.0;
+    if (heightRatio <= 0.5) {
+     heightFactor = smoothstep(0.0, 0.5, heightRatio);
+    } else {
+     heightFactor = smoothstep(1.0, 0.5, heightRatio);
+    }
+    heightFactor = max(heightFactor, 0.2); // 确保最小密度
+    
     density *= heightFactor;
+    
+    // 应用边缘软化
+    density *= edgeFactor;
+    
+    // 确保最小密度，防止云层完全消失
+    density = max(density, 0.0);
     
     return density;
    }
    
-   // 光照行进
+   // 光照行进 - 改进边界处理
    float lightmarch(vec3 position, vec3 lightDir, float lightSteps) {
     float totalDensity = 0.0;
     float stepSize = 300.0;
+    
+    // 扩展光照采样范围
+    float extendedCloudBase = cloudBase - cloudThickness * edgeSoftness;
+    float extendedCloudTop = cloudTop + cloudThickness * edgeSoftness;
     
     for (int step = 0; step < 12; step++) {
      if (float(step) >= lightSteps) break;
@@ -380,17 +434,25 @@ class GlobalVolumetricClouds {
      position += lightDir * stepSize;
      
      float height = length(position) - realPlanetRadius;
-     if (height < cloudBase || height > cloudTop) break;
+     // 使用扩展边界进行检查
+     if (height < extendedCloudBase || height > extendedCloudTop) break;
      
      float heightRatio;
      float lightSample = cloudDensity(position, windVector, true, heightRatio);
      totalDensity += lightSample * stepSize * 0.001;
     }
     
-    return BeersLaw(totalDensity, absorptionCoeff);
+    // 改进光照计算，确保低吸收系数时有足够的光照
+    float effectiveAbsorption = max(absorptionCoeff * 0.5, 0.05); // 光照采样时使用较低的吸收系数
+    float transmittance = BeersLaw(totalDensity, effectiveAbsorption);
+    
+    // 在低密度区域增强光照
+    float lightBoost = 1.0 + (1.0 - saturate(totalDensity)) * 0.5;
+    
+    return saturate(transmittance * lightBoost);
    }
    
-   // 主要的云渲染函数
+   // 主要的云渲染函数 - 改进边界处理
    vec4 calculate_clouds(vec3 start, vec3 dir, float maxDistance, vec3 lightDir, vec3 wind) {
     // 射线-球体相交计算
     vec2 toTop = raySphereIntersect(start, dir, cloudTopRadius);
@@ -398,26 +460,35 @@ class GlobalVolumetricClouds {
     
     float startHeight = length(start) - realPlanetRadius;
     float tmin = 100.0;
-    float tmax = min(maxDistance, CLOUDS_MAX_VIEWING_DISTANCE);
+    float tmax = min(maxDistance, maxViewingDistance);
     
-    // 计算射线进入和退出云层的距离
-    if (startHeight > cloudTop) {
-     if (toTop.x < 0.0) return vec4(0.0);
-     tmin = max(tmin, toTop.x);
-     if (toBase.x > 0.0) {
-      tmax = min(tmax, toBase.x);
+    // 添加扩展边界以实现更柔和的过渡
+    float extendedCloudBase = cloudBase - cloudThickness * edgeSoftness;
+    float extendedCloudTop = cloudTop + cloudThickness * edgeSoftness;
+    float extendedBaseRadius = realPlanetRadius + extendedCloudBase;
+    float extendedTopRadius = realPlanetRadius + extendedCloudTop;
+    
+    vec2 toExtendedTop = raySphereIntersect(start, dir, extendedTopRadius);
+    vec2 toExtendedBase = raySphereIntersect(start, dir, extendedBaseRadius);
+    
+    // 使用扩展边界进行相交计算
+    if (startHeight > extendedCloudTop) {
+     if (toExtendedTop.x < 0.0) return vec4(0.0);
+     tmin = max(tmin, toExtendedTop.x);
+     if (toExtendedBase.x > 0.0) {
+      tmax = min(tmax, toExtendedBase.x);
      } else {
-      tmax = min(tmax, toTop.y);
+      tmax = min(tmax, toExtendedTop.y);
      }
-    } else if (startHeight < cloudBase) {
-     if (toBase.y < 0.0) return vec4(0.0);
-     tmin = max(tmin, toBase.y);
-     tmax = min(tmax, toTop.y);
+    } else if (startHeight < extendedCloudBase) {
+     if (toExtendedBase.y < 0.0) return vec4(0.0);
+     tmin = max(tmin, toExtendedBase.y);
+     tmax = min(tmax, toExtendedTop.y);
     } else {
-     if (toBase.x > 0.0) {
-      tmax = min(tmax, toBase.x);
+     if (toExtendedBase.x > 0.0) {
+      tmax = min(tmax, toExtendedBase.x);
      } else {
-      tmax = min(tmax, toTop.y);
+      tmax = min(tmax, toExtendedTop.y);
      }
     }
     
@@ -441,28 +512,44 @@ class GlobalVolumetricClouds {
      if (distance >= tmax || float(i) >= densitySteps) break;
      
      vec3 position = start + dir * distance;
+     float height = length(position) - realPlanetRadius;
      
-     float heightRatio;
-     float density = cloudDensity(position, wind, false, heightRatio);
-     
-     if (density > 0.01) {
-      // 计算光照传输
-      float lightTransmittance = lightmarch(position, lightDir, lightSteps);
+     // 只在实际云层范围内计算密度
+     if (height >= extendedCloudBase && height <= extendedCloudTop) {
+      float heightRatio;
+      float density = cloudDensity(position, wind, false, heightRatio);
       
-      // 计算散射颜色
-      vec3 scatterColor = czm_lightColor * lightTransmittance * phase;
-      
-      // 应用密度衰减
-      float stepTransmittance = BeersLaw(density * stepSize * 0.01, absorptionCoeff);
-      
-      // 累积光照
-      lightAccumulation += totalTransmittance * density * scatterColor * stepSize * 0.01;
-      
-      // 更新透射率
-      totalTransmittance *= stepTransmittance;
-      
-      // 早期退出优化
-      if (totalTransmittance < 0.01) break;
+      if (density > 0.001) { // 降低密度阈值，让更多的云能够被渲染
+       // 计算光照传输
+       float lightTransmittance = lightmarch(position, lightDir, lightSteps);
+       
+       // 改进散射颜色计算
+       vec3 baseCloudColor = vec3(1.0, 1.0, 1.0); // 基础云颜色为白色
+       vec3 scatterColor = czm_lightColor * lightTransmittance * phase;
+       
+       // 混合基础颜色和散射颜色
+       vec3 finalCloudColor = mix(baseCloudColor * 0.3, scatterColor, lightTransmittance);
+       
+       // 调整密度衰减计算，使低吸收系数时云层更明亮
+       float effectiveDensity = density * stepSize * 0.01;
+       float stepTransmittance = BeersLaw(effectiveDensity, max(absorptionCoeff, 0.1)); // 确保最小吸收系数
+       
+       // 计算散射强度，低吸收系数时增强散射
+       float scatteringStrength = 1.0 + (1.0 - saturate(absorptionCoeff)) * 2.0;
+       
+       // 改进距离衰减 - 使用更柔和的衰减函数
+       float softDistanceFactor = 1.0 / (1.0 + distance * distance / (maxViewingDistance * maxViewingDistance * 0.25));
+       float finalDensity = density * softDistanceFactor;
+       
+       // 累积光照
+       lightAccumulation += totalTransmittance * finalDensity * finalCloudColor * stepSize * 0.01 * scatteringStrength;
+       
+       // 更新透射率
+       totalTransmittance *= stepTransmittance;
+       
+       // 放宽早期退出条件，防止云层提前消失
+       if (totalTransmittance < 0.005) break;
+      }
      }
      
      distance += stepSize;
@@ -493,7 +580,7 @@ class GlobalVolumetricClouds {
     
     float distance = length(posToEye);
     if (depth == 1.0) {
-     distance = CLOUDS_MAX_VIEWING_DISTANCE;
+     distance = maxViewingDistance;
     }
     
     // 计算风向偏移
@@ -510,11 +597,16 @@ class GlobalVolumetricClouds {
     
     // 增强云的亮度和对比度
     if (clouds.a > 0.0) {
-     clouds.rgb *= 2.0;
+     // 根据吸收系数调整亮度增强
+     float brightnessBoost = 1.5 + (1.0 - saturate(absorptionCoeff)) * 1.5; // 低吸收系数时更亮
+     clouds.rgb *= brightnessBoost;
      
-     // 添加环境光
-     vec3 ambientColor = vec3(0.3, 0.4, 0.6) * 0.2;
+     // 添加环境光，确保云层有基础亮度
+     vec3 ambientColor = vec3(0.4, 0.45, 0.55) * 0.3;
      clouds.rgb += ambientColor * clouds.a;
+     
+     // 确保云层颜色不会过暗
+     clouds.rgb = max(clouds.rgb, vec3(0.1) * clouds.a);
      
      // 应用云层到场景
      color.rgb = mix(color.rgb, clouds.rgb, clouds.a);
